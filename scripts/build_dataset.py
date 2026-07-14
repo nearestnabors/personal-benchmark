@@ -31,6 +31,19 @@ DIR = Path(__file__).resolve().parent.parent
 
 def load_rows(path: Path) -> list[dict]:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    # Common mix-up: pointing this at a taxonomy instead of a golden dataset.
+    if (
+        rows
+        and "input" not in rows[0]
+        and {"task_type", "representative_examples"} <= rows[0].keys()
+    ):
+        raise SystemExit(
+            f"{path} looks like a TAXONOMY (task_type/representative_examples),\n"
+            "not a golden dataset. The taxonomy tells you WHICH task types to cover;\n"
+            "Step 3 is where you author eval examples for them, each with an input, a\n"
+            "scoring kind (exact|structured|judge), and a reference (exact/structured)\n"
+            "or rubric (judge). See data/sample_dataset.jsonl for the exact format."
+        )
     for r in rows:
         if r.get("scoring") not in {"exact", "structured", "judge"}:
             raise ValueError(
