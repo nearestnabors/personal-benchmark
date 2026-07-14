@@ -1,37 +1,26 @@
-"""Surface your RECURRING task types from harvested prompts.
+"""Surface your RECURRING task types from harvested prompts — using a big model.
 
-You can't recall these from memory — that's the point. This groups your user
-requests into task types, ranks them by how often you actually do them, and
-prints representative examples so you can pick which ones are worth an eval.
+You can't recall your recurring tasks from memory; that's the point of harvesting.
+Grouping messy real history well is a job for a LARGE model. Simple local keyword
+matching is too crude and misses too much, so this relies on a big model only.
 
-Three methods, swappable with --method:
+Two methods:
 
-  keyword  (default, offline, zero deps) — bucket prompts by simple verb/keyword
-           heuristics. Crude and dumps a lot into "other" on real history; treat
-           it as a rough first pass you curate, not ground truth.
-  paste    — emit a copy-paste-ready prompt (your redacted prompts + a strict
-           JSON schema) to hand to a BIG model like Claude or ChatGPT. No API key
-           needed and by far the best grouping. Save the model's JSON reply as
-           taxonomy.json.
-  llm      — call an OpenAI-compatible endpoint to label each prompt (ONE call
-           per prompt). Point --base-url at a local llama-server, or a hosted API
-           with --model and --api-key. Note: hosted = one paid call per prompt, so
-           for a big model prefer --method paste (one call, and no key).
+  paste (default) — write a copy-paste-ready prompt (your redacted prompts + a
+                    strict JSON schema) to hand to a big model like Claude or
+                    ChatGPT. No API key. Save the model's JSON reply as
+                    data/taxonomy.json.
+  llm             — send that same prompt to an OpenAI-compatible endpoint and
+                    write data/taxonomy.json for you. Point --base-url at a
+                    hosted API with --model and --api-key.
 
     python scripts/taxonomy.py --in data/harvested/all.jsonl
-    python scripts/taxonomy.py --in data/harvested/all.jsonl --method paste
-
-    # local llama-server
-    python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm --base-url http://127.0.0.1:8102/v1
-    # OpenAI
     python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \\
         --base-url https://api.openai.com/v1 --model gpt-4o-mini --api-key $OPENAI_API_KEY
-    # Claude (OpenAI-compatible endpoint)
-    python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \\
-        --base-url https://api.anthropic.com/v1 --model claude-haiku-4-5-20251001 --api-key $ANTHROPIC_API_KEY
+    # (Claude: --base-url https://api.anthropic.com/v1 --model claude-haiku-4-5-20251001)
 
-Human-in-the-loop: this only PRINTS the ranked list and writes taxonomy.json.
-You choose which task types to carry into your dataset. It does not auto-decide.
+Human-in-the-loop: this surfaces and ranks your task types. YOU decide which ones
+are worth an eval in Step 3. It does not auto-decide.
 """
 
 from __future__ import annotations
@@ -39,106 +28,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
-from collections import Counter, defaultdict
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent.parent
 
-# Ordered heuristic buckets: first match wins. Intentionally simple and legible.
-#
-# Keyword matching is deliberately crude. On real coding-agent history it WILL
-# mislabel and dump a lot into "other" — treat the output as a rough starting
-# point you curate by hand, not ground truth. For real grouping use --method llm.
-# Single-word keys match on WORD BOUNDARIES (so "log" won't match "login"); keys
-# containing a space match as a literal phrase.
-_KEYWORD_BUCKETS: list[tuple[str, tuple[str, ...]]] = [
-    ("extract_fields", ("extract", "parse", "into json", "as json", "field", "fields")),
-    ("summarize", ("summarize", "summary", "tl;dr", "recap", "bullet", "bullets")),
-    (
-        "triage_error",
-        (
-            "error",
-            "errors",
-            "exception",
-            "stack trace",
-            "traceback",
-            "failing",
-            "triage",
-            "log",
-            "logs",
-        ),
-    ),
-    (
-        "rewrite",
-        (
-            "rewrite",
-            "reword",
-            "rephrase",
-            "more concise",
-            "tone",
-            "polish",
-            "proofread",
-        ),
-    ),
-    ("classify", ("classify", "categorize", "categorise", "which category", "intent")),
-    ("explain", ("explain", "what does", "how does", "why does", "walk me through")),
-    (
-        "write_code",
-        (
-            "implement",
-            "refactor",
-            "write a test",
-            "write tests",
-            "add a test",
-            "fix the bug",
-        ),
-    ),
-]
-
-
-def _matches(low: str, key: str) -> bool:
-    """Phrase keys match literally; single-word keys match on word boundaries."""
-    if " " in key:
-        return key in low
-    return re.search(rf"\b{re.escape(key)}\b", low) is not None
-
-
-def bucket_keyword(text: str) -> str:
-    low = text.lower()
-    for name, keys in _KEYWORD_BUCKETS:
-        if any(_matches(low, k) for k in keys):
-            return name
-    return "other"
-
-
-def bucket_llm(
-    texts: list[str],
-    base_url: str,
-    model: str | None = None,
-    api_key: str | None = None,
-) -> list[str]:
-    sys.path.insert(0, str(DIR / "scripts"))
-    from openai_client import LocalLLM
-
-    llm = LocalLLM(
-        base_url=base_url,
-        api_key=api_key or "not-needed-for-local",
-        model=model or "local",
-    )
-    labels = []
-    for t in texts:
-        prompt = (
-            "Label this user request with a short snake_case task type "
-            "(e.g. extract_fields, summarize, triage_error, rewrite_email). "
-            "Reply with only the label.\n\nRequest: " + t[:500]
-        )
-        labels.append(llm.chat(prompt).strip().split()[0].lower() if t else "other")
-    return labels
-
-
-_PASTE_HEADER = """I'm analyzing my own AI-assistant usage to build a personal eval set.
+_HEADER = """I'm analyzing my own AI-assistant usage to build a personal eval set.
 Below are {n} requests I've actually made (secrets/PII already redacted).
 
 Group them into 8-15 recurring TASK TYPES. Reply with ONLY a JSON array, no prose,
@@ -152,119 +47,95 @@ requests copied verbatim from the list. Here are my requests:
 """
 
 
-def emit_paste_prompt(prompts: list[str], out: Path, limit: int) -> None:
-    """Write a copy-paste-ready prompt for a big model (Claude, ChatGPT, ...).
-
-    Grouping messy real history is exactly what a large model is good at, and it
-    needs no API key: you paste this file in, then save the JSON reply as
-    taxonomy.json. Your prompts are already redacted, but you are sending them to
-    a third-party model — that's your call to make.
-    """
-    # De-duplicate while preserving order, then cap so it stays pasteable.
+def load_prompts(path: Path, limit: int) -> tuple[list[str], int]:
+    """Real user requests: dedup (preserve order), then cap so it stays pasteable."""
+    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     seen: set[str] = set()
-    unique = [p for p in prompts if not (p in seen or seen.add(p))]
-    sample = unique[:limit]
-    body = "\n".join(f"{i}. {p}" for i, p in enumerate(sample, 1))
-    out.write_text(_PASTE_HEADER.format(n=len(sample)) + "\n" + body + "\n")
-    print(f"Wrote {out}")
-    print(
-        f"  {len(sample)} of {len(unique)} unique prompts included"
-        + (
-            f" (capped at {limit}; raise --max-paste for more)"
-            if len(unique) > limit
-            else ""
-        )
-    )
-    print("\nNext:")
-    print("  1. Paste the whole file into Claude or ChatGPT.")
-    print("  2. Save its JSON reply as data/taxonomy.json.")
-    print("  3. Pick the task types worth an eval and build your dataset.")
+    prompts: list[str] = []
+    for r in records:
+        text = (r.get("text") or "").strip()
+        if r.get("role") != "user" or not text or text in seen:
+            continue
+        seen.add(text)
+        prompts.append(text)
+    return prompts[:limit], len(seen)
+
+
+def build_prompt(prompts: list[str]) -> str:
+    body = "\n".join(f"{i}. {p}" for i, p in enumerate(prompts, 1))
+    return _HEADER.format(n=len(prompts)) + "\n" + body + "\n"
+
+
+def extract_json_array(text: str) -> list[dict]:
+    """Pull the JSON array out of a model reply, tolerating fences/prose."""
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return []
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
 
 
 def main() -> None:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument(
-        "--in", dest="inp", type=Path, default=DIR / "data/harvested/all.jsonl"
-    )
-    p.add_argument(
-        "--method",
-        choices=["keyword", "llm", "paste"],
-        default="keyword",
-        help="keyword=offline heuristic; llm=local/OpenAI-compatible endpoint; "
-        "paste=emit a prompt to hand to a big model (Claude/ChatGPT)",
-    )
+    p.add_argument("--in", dest="inp", type=Path, default=DIR / "data/harvested/all.jsonl")
+    p.add_argument("--method", choices=["paste", "llm"], default="paste")
     p.add_argument(
         "--base-url",
-        default="http://127.0.0.1:8102/v1",
-        help="endpoint for --method llm: a local llama-server, or a hosted "
-        "OpenAI-compatible API (OpenAI: https://api.openai.com/v1 ; "
-        "Claude: https://api.anthropic.com/v1)",
+        default="https://api.openai.com/v1",
+        help="OpenAI-compatible endpoint for --method llm "
+        "(OpenAI: https://api.openai.com/v1 ; Claude: https://api.anthropic.com/v1)",
     )
+    p.add_argument("--model", default=None, help="model id for --method llm (e.g. gpt-4o-mini)")
     p.add_argument(
-        "--model",
-        default=None,
-        help="model id for a hosted --method llm (e.g. gpt-4o-mini, claude-haiku-4-5-20251001)",
-    )
-    p.add_argument(
-        "--api-key",
-        default=os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
-        help="API key for a hosted --method llm (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)",
+        "--api-key", default=os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     )
     p.add_argument("--out", type=Path, default=DIR / "data/taxonomy.json")
-    p.add_argument(
-        "--examples", type=int, default=3, help="representative examples per task type"
-    )
-    p.add_argument(
-        "--max-paste", type=int, default=400, help="max prompts for --method paste"
-    )
+    p.add_argument("--max", type=int, default=400, help="max prompts to send the model")
     args = p.parse_args()
 
     if not args.inp.exists():
         sys.exit(f"no harvested file at {args.inp} — run scripts/harvest.py first")
 
-    records = [
-        json.loads(line) for line in args.inp.read_text().splitlines() if line.strip()
-    ]
-    prompts = [r["text"] for r in records if r.get("role") == "user" and r.get("text")]
+    prompts, total = load_prompts(args.inp, args.max)
     if not prompts:
         sys.exit("no user prompts found in the harvested file")
+    prompt = build_prompt(prompts)
 
     if args.method == "paste":
-        emit_paste_prompt(
-            prompts, args.out.with_name("taxonomy_prompt.txt"), args.max_paste
-        )
+        out = args.out.with_name("taxonomy_prompt.txt")
+        out.write_text(prompt)
+        print(f"Wrote {out}")
+        capped = f" (capped at {args.max}; raise --max for more)" if total > args.max else ""
+        print(f"  {len(prompts)} of {total} unique prompts included{capped}")
+        print("\nNext:")
+        print("  1. Paste the whole file into Claude or ChatGPT.")
+        print("  2. Save its JSON reply as data/taxonomy.json.")
+        print("  3. Pick the task types worth an eval, then build your dataset (Step 3).")
         return
 
-    if args.method == "llm":
-        labels = bucket_llm(
-            prompts, args.base_url, model=args.model, api_key=args.api_key
-        )
-    else:
-        labels = [bucket_keyword(t) for t in prompts]
+    # llm: send it and write taxonomy.json for them
+    sys.path.insert(0, str(DIR / "scripts"))
+    from openai_client import LocalLLM
 
-    counts = Counter(labels)
-    examples: dict[str, list[str]] = defaultdict(list)
-    for text, label in zip(prompts, labels):
-        if len(examples[label]) < args.examples:
-            examples[label].append(text)  # keep the FULL prompt in the JSON
-
-    taxonomy = [
-        {"task_type": label, "count": count, "representative_examples": examples[label]}
-        for label, count in counts.most_common()
-    ]
+    llm = LocalLLM(
+        base_url=args.base_url,
+        api_key=args.api_key or "not-needed-for-local",
+        model=args.model or "local",
+    )
+    taxonomy = extract_json_array(llm.chat(prompt))
+    if not taxonomy:
+        sys.exit("model returned no parseable JSON array — try --method paste, or a stronger model")
     args.out.write_text(json.dumps(taxonomy, indent=2))
 
-    print(f"Ranked task types from {len(prompts)} prompts ({args.method}):\n")
+    print(f"Wrote {args.out} — your task types, ranked:\n")
     for i, t in enumerate(taxonomy, 1):
-        print(f"  {i:2d}. {t['task_type']:16s} {t['count']:4d}×")
-        for ex in t["representative_examples"]:
-            oneline = ex.replace("\n", " ")
-            print(f"        - {oneline[:120]}{'…' if len(oneline) > 120 else ''}")
-    print(
-        f"\nWrote {args.out}. Pick the task types worth an eval, then build your dataset."
-    )
+        print(f"  {i:2d}. {t.get('task_type', '?'):24s} {t.get('count', '?')}×")
+    print("\nPick the task types worth an eval, then build your dataset (Step 3).")
 
 
 if __name__ == "__main__":

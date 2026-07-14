@@ -111,41 +111,40 @@ Two things it does before anything touches disk: it **redacts** secrets and PII 
 **Run this:**
 
 ```bash
+# Default: writes a prompt to hand to a big model (Claude/ChatGPT). No API key.
 python scripts/taxonomy.py --in data/harvested/all.jsonl
-```
 
-**What you'll see:**
-
-```text
-Ranked task types from 15 prompts (keyword):
-
-   1. extract_fields      5×
-        - Extract the name, email, and company into JSON: 'Jordan Lee, [REDACTED_EMAIL], Acme Corp'
-   2. triage_error        4×
-        - My deploy failed with this log, triage it and tell me if it's my code or infra.
-   3. summarize           3×
-        - Summarize this Slack thread into 3 bullet points for my standup.
-   4. rewrite             2×
-        - Rewrite this email to be more concise and friendly but keep the deadline.
-```
-
-**What it's doing:** you can't recall your recurring tasks from memory — this ranks them by how often you actually make each kind of request, and writes `data/taxonomy.json`. It's human-in-the-loop: it only *prints and writes* the ranked list; **you** decide which task types are worth an eval.
-
-The default `keyword` method is instant and fully offline, but it's **crude** — on real history it mislabels and dumps most prompts into `other`. Treat it as a rough first pass. For real grouping, recruit a **big model**:
-
-```bash
-# Recruit Claude/ChatGPT — no API key. Writes a copy-paste prompt (your redacted
-# prompts + a strict JSON schema); paste it in, save the reply as data/taxonomy.json.
-python scripts/taxonomy.py --in data/harvested/all.jsonl --method paste
-
-# Or call an OpenAI-compatible endpoint directly (ONE call per prompt):
+# Or send it straight to a hosted model and get data/taxonomy.json back:
 python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
     --base-url https://api.openai.com/v1 --model gpt-4o-mini --api-key $OPENAI_API_KEY
 python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
     --base-url https://api.anthropic.com/v1 --model claude-haiku-4-5-20251001 --api-key $ANTHROPIC_API_KEY
 ```
 
-Claude works here because Anthropic exposes an [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk) — same client, just a different `--base-url`, `--model`, and key. Your prompts are redacted before they leave `harvest.py`, but `paste`/hosted `llm` do send them to a third-party model — that's your call to make.
+**What you'll see** (the default `paste` method):
+
+```text
+Wrote data/taxonomy_prompt.txt
+  400 of 1400 unique prompts included (capped at 400; raise --max for more)
+
+Next:
+  1. Paste the whole file into Claude or ChatGPT.
+  2. Save its JSON reply as data/taxonomy.json.
+```
+
+Paste that file into Claude/ChatGPT and it returns `data/taxonomy.json` — the task types you actually do, ranked:
+
+```json
+[
+  {"task_type": "debug_runtime_errors", "count": 78,
+   "representative_examples": ["Tried launching the app and got this traceback ...", "..."]},
+  {"task_type": "triage_error", "count": 45, "representative_examples": ["..."]}
+]
+```
+
+**What it's doing:** you can't recall your recurring tasks from memory — a big model reads all your requests and groups them into the handful of things you do over and over. **We use a big model on purpose:** simple local keyword matching is too crude and misses too much. It's human-in-the-loop — **you** pick which task types are worth an eval in Step 3.
+
+Claude works via `--method llm` because Anthropic exposes an [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk) — same client, just a different `--base-url`, `--model`, and key. Your prompts are redacted before they leave `harvest.py`, but both methods send them to a third-party model — that's your call to make.
 
 ## Step 3 — Build your golden dataset
 
