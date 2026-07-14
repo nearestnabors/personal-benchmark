@@ -1,0 +1,4 @@
+{"type":"mode","sessionId":"fix-sess-1","mode":"default"}
+{"type":"user","sessionId":"fix-sess-1","timestamp":1735732800000,"message":{"role":"user","content":"Extract the name, email, and company from this signature into JSON."}}
+{"type":"assistant","sessionId":"fix-sess-1","timestamp":1735732810000,"message":{"role":"assistant","content":[{"type":"text","text":"{\"name\": \"Jordan Lee\", \"email\": \"jordan.lee@acme.io\", \"company\": \"Acme Corp\"}"}]}}
+{"type":"user","sessionId":"fix-sess-1","timestamp":1735732820000,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}

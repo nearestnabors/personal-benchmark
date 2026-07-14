@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-01-01T09:00:00.000Z","payload":{"id":"fixture-codex-1","cwd":"/Users/demo/oncall"}}
+{"type":"turn_context","timestamp":"2026-01-01T09:00:01.000Z","payload":{"model":"gpt-x"}}
+{"type":"response_item","timestamp":"2026-01-01T09:00:05.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Triage this error log and tell me whether it's my code or a dependency: ModuleNotFoundError: No module named 'requests'"}]}}
+{"type":"response_item","timestamp":"2026-01-01T09:00:12.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"It's your environment: the 'requests' package isn't installed. Run pip install requests."}]}}
+{"type":"event_msg","timestamp":"2026-01-01T09:00:13.000Z","payload":{"type":"agent_message"}}
+{"type":"response_item","timestamp":"2026-01-01T09:05:00.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Now extract the failing module name and the error type into JSON."}]}}

@@ -1,0 +1,49 @@
+# Model registry: a size ladder of small, tool-calling-capable instruct models.
+#
+# IMPORTANT: tool-calling support is TEMPLATE-dependent. Each model below must
+# be launched with `--jinja` so llama.cpp applies the model's own chat/tool
+# template. The startup probe in serve.sh fails loudly if a tool-call roundtrip
+# does not parse.
+#
+# `gguf` is a path OR a Hugging Face repo:file spec you have already downloaded.
+# Fill in real local paths before serving. Nothing here is downloaded for you.
+#
+# `port` is fixed per model so the client and Goose can find it deterministically.
+
+models:
+  - name: qwen2.5-0.5b
+    display: "Qwen2.5 0.5B Instruct"
+    params_b: 0.5
+    port: 8101
+    gguf: "~/models/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf"
+    template: jinja # use the model's built-in template
+
+  - name: qwen2.5-1.5b
+    display: "Qwen2.5 1.5B Instruct"
+    params_b: 1.5
+    port: 8102
+    gguf: "~/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
+    template: jinja
+
+  - name: llama3.2-3b
+    display: "Llama 3.2 3B Instruct"
+    params_b: 3.0
+    port: 8103
+    gguf: "~/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+    template: jinja
+
+  - name: qwen2.5-7b
+    display: "Qwen2.5 7B Instruct"
+    params_b: 7.0
+    port: 8104
+    gguf: "~/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+    template: jinja
+
+# The judge model runs on its own fixed port (see config.yaml judge.base_url).
+judge:
+  name: judge
+  display: "Local judge (Qwen2.5 7B Instruct)"
+  params_b: 7.0
+  port: 8100
+  gguf: "~/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+  template: jinja

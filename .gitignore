@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+data/harvested/
+data/taxonomy.json
+reports/
+.DS_Store

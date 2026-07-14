@@ -1,0 +1,10 @@
+# Install into a fresh venv:  uv pip install -r requirements.txt
+arize-phoenix-client>=2.13.0
+arize-phoenix-otel>=0.16.1
+arize-phoenix-evals>=3.1.0
+openai>=1.40.0
+openinference-instrumentation-openai>=0.1.0
+pandas>=2.0.0
+pyyaml>=6.0
+zstandard>=0.22.0   # only needed to read compressed Codex .jsonl.zst sessions
+pytest>=8.0.0       # for the harvester tests

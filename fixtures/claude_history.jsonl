@@ -1,0 +1,12 @@
+{"display":"Extract the name, email, and company from this signature into JSON: 'Jordan Lee, jordan.lee@acme.io, Acme Corp'","pastedContents":{},"project":"/Users/demo/inbox-tools","sessionId":"fix-sess-1","timestamp":1735732800000}
+{"display":"Summarize this Slack thread into 3 bullet points for my standup.","pastedContents":{},"project":"/Users/demo/inbox-tools","sessionId":"fix-sess-1","timestamp":1735736400000}
+{"display":"Here's a stack trace from prod, tell me the likely root cause and which file to look at first.","pastedContents":{},"project":"/Users/demo/oncall","sessionId":"fix-sess-2","timestamp":1735740000000}
+{"display":"Rewrite this email to be more concise and friendly but keep the deadline.","pastedContents":{},"project":"/Users/demo/inbox-tools","sessionId":"fix-sess-1","timestamp":1735743600000}
+{"display":"Pull the order id, total, and currency out of this receipt text and give me JSON.","pastedContents":{},"project":"/Users/demo/inbox-tools","sessionId":"fix-sess-3","timestamp":1735747200000}
+{"display":"My deploy failed with this log, triage it and tell me if it's my code or infra.","pastedContents":{},"project":"/Users/demo/oncall","sessionId":"fix-sess-2","timestamp":1735750800000}
+{"display":"Summarize this long PR description into what changed and why.","pastedContents":{},"project":"/Users/demo/reviews","sessionId":"fix-sess-4","timestamp":1735754400000}
+{"display":"Rewrite this rejection email so it's kind but clear. Here is my draft.","pastedContents":{},"project":"/Users/demo/inbox-tools","sessionId":"fix-sess-1","timestamp":1735758000000}
+{"display":"Test setup: my key is sk-abcd1234efgh5678ijkl90mn and email me at demo.user@example.com when done.","pastedContents":{},"project":"/Users/demo/scratch","sessionId":"fix-sess-5","timestamp":1735761600000}
+{"display":"Extract every date and its label from this contract clause as a JSON list.","pastedContents":{},"project":"/Users/demo/inbox-tools","sessionId":"fix-sess-3","timestamp":1735765200000}
+{"display":"Summarize this customer call transcript and list the action items.","pastedContents":{},"project":"/Users/demo/reviews","sessionId":"fix-sess-4","timestamp":1735768800000}
+{"display":"Triage this CI failure log and tell me the first failing test.","pastedContents":{},"project":"/Users/demo/oncall","sessionId":"fix-sess-2","timestamp":1735772400000}

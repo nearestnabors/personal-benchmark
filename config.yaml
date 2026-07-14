@@ -1,0 +1,37 @@
+# SAGE-finder configuration. Everything the pipeline needs in one place.
+
+# --- Phoenix ---
+phoenix:
+  # Where your local Phoenix server is listening. Start one with:
+  #   pip install arize-phoenix && phoenix serve
+  endpoint: "http://localhost:6006"
+  project_name: "personal-benchmark"
+
+# --- Dataset ---
+dataset:
+  name: "personal-benchmark-SAMPLE"
+  # The committed SAMPLE golden set. Swap for data/harvested-derived data later.
+  path: "data/sample_dataset.jsonl"
+
+# --- The "good enough" bar ---
+# A model is a SAGE candidate only if its overall pass rate clears this.
+# The SAGE is the SMALLEST candidate that clears it.
+threshold: 0.7
+
+# --- Local judge (for subjective tasks) ---
+# The judge is itself a local llama.cpp model by default: offline, no API key.
+# To use a hosted judge instead, set provider/base_url/api_key accordingly.
+judge:
+  provider: "openai" # OpenAI-compatible; llama-server speaks this dialect
+  model: "judge"
+  base_url: "http://localhost:8100/v1"
+  api_key: "not-needed-for-local"
+
+# --- Local model serving (llama.cpp) ---
+serving:
+  host: "127.0.0.1"
+  registry: "models.yaml"
+  context_size: 8192 # -c 8192; too small and agents ignore the system prompt
+
+# --- Deploy target (appendix) ---
+harness: "goose" # goose | aider
