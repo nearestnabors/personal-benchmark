@@ -47,7 +47,7 @@ personal-benchmark/
    uv venv && source .venv/bin/activate
    uv pip install -r requirements.txt
    ```
-2. **Install llama.cpp** — you need `llama-server` on your PATH (Homebrew: `brew install llama.cpp`, or build from source). This is the only inference engine used here.
+2. **[Install llama.cpp](https://llama-cpp.com/).** You need `llama-server` on your PATH (Homebrew: `brew install llama.cpp`, or build from source). This is the only inference engine used here.
 3. **Run Phoenix locally**
    ```bash
    pip install arize-phoenix
@@ -132,7 +132,22 @@ Ranked task types from 15 prompts (keyword):
         - Rewrite this email to be more concise and friendly but keep the deadline.
 ```
 
-The default `keyword` method is crude but instant and fully offline. Pass `--method llm --base-url http://127.0.0.1:8102/v1` to have a local model do the labeling instead.
+The default `keyword` method is instant and fully offline, but it's **crude** — on real history it mislabels and dumps most prompts into `other`. Treat it as a rough first pass you curate by hand, not ground truth.
+
+Grouping messy real usage is a job for a **big model**. Two better options:
+
+```bash
+# Recruit Claude/ChatGPT — no API key. Writes a copy-paste-ready prompt
+# (your already-redacted prompts + a strict JSON schema). Paste it into
+# Claude or ChatGPT, then save its JSON reply as data/taxonomy.json.
+python scripts/taxonomy.py --in data/harvested/all.jsonl --method paste
+
+# Or call any OpenAI-compatible endpoint directly (local llama-server, or a
+# hosted API by pointing --base-url at it).
+python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm --base-url http://127.0.0.1:8102/v1
+```
+
+Your prompts are redacted before they ever leave `harvest.py`, but `paste`/hosted `llm` do send them to a third-party model — that's your call to make.
 
 > **Note:** This step is human-in-the-loop by design. It only *prints* the ranked list and writes `data/taxonomy.json`. **You** decide which task types are worth an eval — the script never auto-decides for you.
 
