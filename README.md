@@ -16,12 +16,14 @@ You will:
 
 > **Note:** Everything here runs **offline** on a committed `SAMPLE` dataset, so you can follow along with zero exports and no internet. Local inference is **llama.cpp** (`llama-server`) — no Ollama. And no number in any report is invented: every score comes from a real run, or is labeled `SAMPLE`.
 
+**Every step below follows the same rhythm: _Run this_ first, _what you'll see_ second, _what it's doing_ third.**
+
 ## Repo layout
 
 ```
 personal-benchmark/
 ├── config.yaml            # endpoint, threshold, judge, serving
-├── models.yaml            # size ladder of tool-calling GGUFs (fill in real paths)
+├── models.yaml            # size ladder of tool-calling GGUFs (auto-downloads via -hf)
 ├── requirements.txt
 ├── data/
 │   └── sample_dataset.jsonl   # 12-example SAMPLE golden set (objective + judge)
@@ -30,6 +32,7 @@ personal-benchmark/
 │   ├── redact.py          # PII/secret redaction
 │   ├── harvest.py         # Claude/ChatGPT/Codex usage -> normalized JSONL
 │   ├── taxonomy.py        # rank your recurring task types
+│   ├── make_dataset.py    # draft a golden dataset from your REAL prompts
 │   ├── build_dataset.py   # upload the golden set to Phoenix
 │   ├── openai_client.py   # thin OpenAI-compatible client (endpoint-agnostic)
 │   ├── serve.sh / stop.sh # launch llama-server + startup probe
@@ -47,7 +50,7 @@ personal-benchmark/
    uv venv && source .venv/bin/activate
    uv pip install -r requirements.txt
    ```
-2. **[Install llama.cpp](https://llama-cpp.com/).** You need `llama-server` on your PATH (Homebrew: `brew install llama.cpp`, or build from source). This is the only inference engine used here.
+2. **[Install llama.cpp](https://github.com/ggml-org/llama.cpp).** You need `llama-server` on your PATH (Homebrew: `brew install llama.cpp`, or build from source). This is the only inference engine used here.
 3. **Run Phoenix locally**
    ```bash
    pip install arize-phoenix
@@ -56,50 +59,24 @@ personal-benchmark/
 
 > **⚠️ Three preflight gotchas** that bite people mid-workshop:
 >
-> 1. **Async exports are slow.** The ChatGPT and Claude *app* data exports arrive by email and can take hours. If you want to use your app history, request it **before** you sit down. (The CLI history in Step 1 is instant, so you can also just use that.)
-> 2. **Tool-calling is template-dependent.** Models must be served with `--jinja` so their own tool template is applied. The serve script probes this and fails loudly.
+> 1. **Async exports are slow.** The ChatGPT and Claude *app* data exports arrive by email and can take hours. Request them **before** you sit down. (The CLI history in Step 1 is instant, so you can also just use that.)
+> 2. **Tool-calling is template-dependent.** Models must be served with `--jinja`. The serve script probes this and fails loudly.
 > 3. **Context size matters.** Serve with `-c 8192` or larger — too small and downstream agents silently ignore their system prompt.
 
 ## Step 1 — Harvest your prompts
 
-Your best source of "what do I actually ask for" is your own history. The `harvest.py` script reads each source and normalizes every message to one record shape:
-
-```json
-{"source": "claude_history", "timestamp": "2026-01-01T09:00:00+00:00",
- "role": "user", "text": "Summarize this thread into 3 bullets.",
- "session_id": "abc", "project": "/Users/you/inbox-tools"}
-```
-
-| Source | Where it lives | Notes |
-| --- | --- | --- |
-| **Claude Code (CLI)** | `~/.claude/history.jsonl` | Your raw prompts. Cleanest source — start here. |
-| **Claude Code transcripts** | `~/.claude/projects/<proj>/*.jsonl` | Defensive fallback; format is internal and changes between versions. |
-| **Codex (CLI)** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | First line is a `session_meta` block; newer sessions are `zstd`-compressed. |
-| **ChatGPT app / web** | `conversations.json` inside the emailed export `.zip` | Settings → Data Controls → Export data. |
-| **Claude app / web** | `conversations.json` inside the emailed export `.zip` | Settings → Export data. |
-
-> **Note:** The CLI transcript formats are **internal and change between tool versions** — this is documented by both tools. `harvest.py` therefore parses *defensively*: unknown line shapes are skipped, never assumed. For Claude, it prefers `history.jsonl` (your raw prompts) over the noisier project transcripts.
-
-### Redaction happens first
-
-Before any text is written to disk, it passes through a redaction pass so API keys, tokens, emails, and other PII never land in your dataset in the clear:
-
-```python
-# scripts/redact.py (excerpt)
-_RULES = [
-    ("openai_key", re.compile(r"sk-[A-Za-z0-9_-]{16,}"), "[REDACTED_OPENAI_KEY]"),
-    ("email",      re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]"),
-    # ... bearer tokens, JWTs, AWS/GCP/GitHub keys, credit cards, SSNs, assigned secrets
-]
-```
-
-### Run it
-
-The repo ships **fixtures** (fake data across all three CLI sources) so you can run everything with no private data:
+**Run this:**
 
 ```bash
+# Workshop demo — committed fake data, no private history needed:
 python scripts/harvest.py --fixtures --out data/harvested
+
+# The real thing — auto-detects ~/.claude and ~/.codex; add app exports with
+# --chatgpt-zip / --claude-zip:
+python scripts/harvest.py --out data/harvested
 ```
+
+**What you'll see:**
 
 ```text
 Harvested 17 records (15 user) from 3 source(s):
@@ -109,15 +86,35 @@ Harvested 17 records (15 user) from 3 source(s):
 Wrote data/harvested/all.jsonl
 ```
 
-When you're ready for the real thing, drop `--fixtures` and it auto-detects your local sources; add `--chatgpt-zip ~/Downloads/export.zip` to fold in an app export.
+**What it's doing:** it reads your assistant history from each source and normalizes every message into one record. Each line of `data/harvested/all.jsonl` is an *output* like this:
+
+```json
+{"source": "claude_history", "timestamp": "2026-01-01T09:00:00+00:00",
+ "role": "user", "text": "Summarize this thread into 3 bullets.",
+ "session_id": "abc", "project": "/Users/you/inbox-tools"}
+```
+
+Sources it pulls from:
+
+| Source | Where it lives | Notes |
+| --- | --- | --- |
+| **Claude Code (CLI)** | `~/.claude/history.jsonl` | Your raw prompts. Cleanest source — start here. |
+| **Claude Code transcripts** | `~/.claude/projects/<proj>/*.jsonl` | Defensive fallback; format is internal and changes between versions. |
+| **Codex (CLI)** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | First line is a `session_meta` block; newer sessions are `zstd`-compressed. |
+| **ChatGPT app / web** | `conversations.json` inside the emailed export `.zip` | Settings → Data Controls → Export data. |
+| **Claude app / web** | `conversations.json` inside the emailed export `.zip` | Settings → Export data. |
+
+Two things it does before anything touches disk: it **redacts** secrets and PII (API keys, tokens, emails), and it **parses defensively** — the CLI transcript formats are internal and change between tool versions, so unknown line shapes are skipped rather than trusted.
 
 ## Step 2 — Find your recurring task types
 
-You can't recall your recurring tasks from memory — that's the whole point of harvesting. `taxonomy.py` groups your prompts into task types and ranks them by how often you actually do them:
+**Run this:**
 
 ```bash
 python scripts/taxonomy.py --in data/harvested/all.jsonl
 ```
+
+**What you'll see:**
 
 ```text
 Ranked task types from 15 prompts (keyword):
@@ -132,39 +129,57 @@ Ranked task types from 15 prompts (keyword):
         - Rewrite this email to be more concise and friendly but keep the deadline.
 ```
 
-The default `keyword` method is instant and fully offline, but it's **crude** — on real history it mislabels and dumps most prompts into `other`. Treat it as a rough first pass you curate by hand, not ground truth.
+**What it's doing:** you can't recall your recurring tasks from memory — this ranks them by how often you actually make each kind of request, and writes `data/taxonomy.json`. It's human-in-the-loop: it only *prints and writes* the ranked list; **you** decide which task types are worth an eval.
 
-Grouping messy real usage is a job for a **big model**. Two better options:
+The default `keyword` method is instant and fully offline, but it's **crude** — on real history it mislabels and dumps most prompts into `other`. Treat it as a rough first pass. For real grouping, recruit a **big model**:
 
 ```bash
-# Recruit Claude/ChatGPT — no API key. Writes a copy-paste-ready prompt
-# (your already-redacted prompts + a strict JSON schema). Paste it into
-# Claude or ChatGPT, then save its JSON reply as data/taxonomy.json.
+# Recruit Claude/ChatGPT — no API key. Writes a copy-paste prompt (your redacted
+# prompts + a strict JSON schema); paste it in, save the reply as data/taxonomy.json.
 python scripts/taxonomy.py --in data/harvested/all.jsonl --method paste
 
-# Or label each prompt via an OpenAI-compatible endpoint. This makes ONE call
-# per prompt, so for a hosted big model prefer `paste` above (one call, no key).
-python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
-    --base-url http://127.0.0.1:8102/v1                                   # local llama-server
-
+# Or call an OpenAI-compatible endpoint directly (ONE call per prompt):
 python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
     --base-url https://api.openai.com/v1 --model gpt-4o-mini --api-key $OPENAI_API_KEY
-
 python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
     --base-url https://api.anthropic.com/v1 --model claude-haiku-4-5-20251001 --api-key $ANTHROPIC_API_KEY
 ```
 
-Claude works here because Anthropic exposes an [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk) — same client, just a different `--base-url`, `--model`, and key. (`--api-key` also falls back to `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in your environment.)
-
-Your prompts are redacted before they ever leave `harvest.py`, but `paste`/hosted `llm` do send them to a third-party model — that's your call to make.
-
-> **Note:** This step is human-in-the-loop by design. It only *prints* the ranked list and writes `data/taxonomy.json`. **You** decide which task types are worth an eval — the script never auto-decides for you.
+Claude works here because Anthropic exposes an [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk) — same client, just a different `--base-url`, `--model`, and key. Your prompts are redacted before they leave `harvest.py`, but `paste`/hosted `llm` do send them to a third-party model — that's your call to make.
 
 ## Step 3 — Build your golden dataset
 
-Now turn your top task types into eval examples. Each example needs an `input`, a `scoring` method, and either a `reference` (the correct answer) or a `rubric` (for subjective tasks).
+**Run this:**
 
-**Be honest about "golden."** Only tasks with a single correct answer get an exact/structured reference. Subjective tasks get an LLM-judge rubric and are labeled as such — don't dress a subjective task up as objective.
+```bash
+# Draft a dataset from your REAL prompts (no API key): writes a prompt to paste
+# into Claude/ChatGPT. Save its JSON-Lines reply as data/dataset.jsonl.
+python scripts/make_dataset.py --in data/harvested/all.jsonl --max 40
+
+# ...review the draft, then upload it to Phoenix:
+python scripts/build_dataset.py --path data/dataset.jsonl
+```
+
+**What you'll see:**
+
+```text
+Offering 40 of your real requests to the model.
+Wrote data/dataset_prompt.txt
+Next:
+  1. Paste it into Claude or ChatGPT.
+  2. Save the JSON-Lines reply as data/dataset.jsonl.
+  3. REVIEW it — fix any wrong references, drop weak rows.
+  4. python scripts/build_dataset.py --path data/dataset.jsonl
+```
+
+Then `build_dataset.py` uploads it (numbers illustrative):
+
+```text
+Uploaded dataset 'personal-benchmark-SAMPLE'  (id=RGF0YXNldDox, version=...)
+  12 examples: 5 exact, 4 judge, 3 structured
+```
+
+**What it's doing:** each dataset row pairs one of *your real requests* (the `input`, kept verbatim — the model never invents tasks) with a way to score it:
 
 | `scoring` | Use when… | Needs | Example task |
 | --- | --- | --- | --- |
@@ -172,82 +187,70 @@ Now turn your top task types into eval examples. Each example needs an `input`, 
 | `structured` | a specific JSON is correct | `reference` (object) | extract name/email/company to JSON |
 | `judge` | quality is subjective | `rubric` (text) | rewrite this email to be concise but keep the deadline |
 
-The committed SAMPLE set (`data/sample_dataset.jsonl`, 12 examples) spans all three. One line looks like:
+`make_dataset.py` feeds your harvested requests to a model that keeps each one verbatim as `input` and only adds the scoring + reference/rubric, skipping requests it can't grade on their own (ones that point at a paste or file). A row looks like:
 
 ```json
 {"task_type": "summarize_thread", "scoring": "judge",
  "input": "Summarize this thread into exactly 3 bullet points for a standup. Thread: ...",
  "reference": null,
  "rubric": "Passing only if the summary is 3 bullets, captures the outage + rollback + fix, and invents no facts.",
- "label": "SAMPLE"}
+ "label": "DRAFT"}
 ```
 
-Upload it to Phoenix as a versioned dataset with the current client API:
-
-```python
-# scripts/build_dataset.py (core)
-from phoenix.client import Client
-
-client = Client(base_url="http://localhost:6006")
-
-dataset = client.datasets.create_dataset(
-    name="personal-benchmark-SAMPLE",
-    inputs=[{"task": r["input"]} for r in rows],
-    outputs=[{"reference": r.get("reference")} for r in rows],
-    metadata=[
-        {"task_type": r["task_type"], "scoring": r["scoring"],
-         "rubric": r.get("rubric"), "label": r.get("label")}
-        for r in rows
-    ],
-)
-```
-
-```bash
-python scripts/build_dataset.py
-```
-
-```text
-Uploaded dataset 'personal-benchmark-SAMPLE'  (id=RGF0YXNldDox, version=...)
-  12 examples: 5 exact, 4 judge, 3 structured
-```
+> **⚠️ Review before you trust it.** A drafted dataset is *not* golden until you read it. Models get "correct" answers wrong, and a single bad `reference` silently corrupts every experiment. Skim the draft, fix references, drop weak rows — *then* upload. Delegating the typing is fine; delegating the judgment is not. (In a pinch, the committed `data/sample_dataset.jsonl` is a ready-made 12-example `SAMPLE` set — just run `python scripts/build_dataset.py`.)
 
 ## Step 4 — Serve small local models with llama.cpp
 
-The `models.yaml` registry is a **size ladder** of small, tool-calling-capable instruct models. Fill in real local `.gguf` paths — nothing is downloaded for you:
-
-```yaml
-models:
-  - {name: qwen2.5-0.5b, display: "Qwen2.5 0.5B Instruct", params_b: 0.5, port: 8101, gguf: "~/models/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf"}
-  - {name: qwen2.5-1.5b, display: "Qwen2.5 1.5B Instruct", params_b: 1.5, port: 8102, gguf: "~/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"}
-  - {name: llama3.2-3b,  display: "Llama 3.2 3B Instruct",  params_b: 3.0, port: 8103, gguf: "~/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"}
-```
-
-Serve one model at a time. Under the hood this is just:
+**Run this:**
 
 ```bash
-llama-server -m <model>.gguf -c 8192 --jinja --host 127.0.0.1 --port 8102
+./scripts/serve.sh qwen2.5-1.5b     # a candidate from models.yaml
+./scripts/serve.sh judge            # the local judge
 ```
 
-`--jinja` applies the model's tool-calling template; `-c 8192` keeps the context large enough. The `serve.sh` wrapper adds a **startup probe** that waits for `/v1/models` and then checks a real tool-call roundtrip, so you never benchmark a broken endpoint:
-
-```bash
-./scripts/serve.sh qwen2.5-1.5b
-```
+**What you'll see:**
 
 ```text
->> Serving qwen2.5-1.5b on 127.0.0.1:8102  (ctx=8192)
->> Waiting for http://127.0.0.1:8102/v1/models ...
+>> Serving qwen2.5-1.5b via Hugging Face: Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M
+   (first run downloads several GB and caches it; later runs are instant/offline)
+>> on 127.0.0.1:8102  (ctx=8192)
+>> Waiting up to 900s for http://127.0.0.1:8102/v1/models (downloading if needed) ...
 >> Probing a tool-call round-trip ...
 >> OK: tool-calling works. qwen2.5-1.5b is ready at http://127.0.0.1:8102
 ```
 
-The rest of the pipeline talks to these through one thin, endpoint-agnostic client (`openai_client.py`), so swapping in `llamafile` or LM Studio later only changes a host and port.
+**What it's doing:** `serve.sh` reads one model from `models.yaml` and launches it under the hood as:
+
+```bash
+llama-server -hf Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M -c 8192 --jinja --host 127.0.0.1 --port 8102
+```
+
+`models.yaml` is a **size ladder** of small, tool-calling instruct models. Each entry has a local `gguf` path *and* an `hf` spec — if the file isn't present, llama.cpp auto-downloads it from Hugging Face and caches it, so you need no manual downloads. `--jinja` applies the model's tool template; `-c 8192` keeps context large enough. The startup probe waits for `/v1/models` and checks a real tool-call roundtrip, so you never benchmark a broken endpoint. Everything downstream talks to these through one thin, endpoint-agnostic client, so swapping in `llamafile` or LM Studio later only changes a host and port.
 
 ## Step 5 — Run experiments and find your SAGE
 
-This is where Phoenix does the heavy lifting. `run_sage.py` runs one **experiment per served model** over your dataset, scoring each example with the right evaluator for its kind, and traces everything into Phoenix.
+**Run this:**
 
-The **task** just runs the model on each input; the **evaluator** dispatches on the example's `scoring` metadata:
+```bash
+python scripts/run_sage.py
+cat reports/sage_report.md
+```
+
+**What you'll see** (SAMPLE — illustrative shape, not a real run):
+
+```markdown
+# SAGE report
+
+| Model                  | Size (B) | Overall | extract | classify | summarize | Mean latency (s) | SAGE? |
+| ---                    | ---      | ---     | ---     | ---      | ---       | ---              | ---   |
+| Qwen2.5 0.5B Instruct  | 0.5      | 58%     | 40%     | 67%      | 50%       | 0.4              |       |
+| Qwen2.5 1.5B Instruct  | 1.5      | 75%     | 80%     | 100%     | 50%       | 0.7              | ✅    |
+| Qwen2.5 3B Instruct    | 3.0      | 83%     | 80%     | 100%     | 75%       | 1.3              |       |
+
+**SAGE = Qwen2.5 1.5B Instruct (1.5B)** — the smallest model that cleared 70%.
+```
+
+**What it's doing:** for every served model, `run_sage.py` runs one Phoenix experiment over your dataset and traces it into Phoenix. The **task** runs the model on each input; the **evaluator** scores each example by its `scoring` kind:
 
 ```python
 # scripts/run_sage.py (core)
@@ -268,48 +271,21 @@ def good_enough(output, expected, metadata, example):
         return score_judge(judge, task=..., output=output, rubric=metadata["rubric"])
     return None
 
-experiment = run_experiment(
-    dataset=dataset, task=task, evaluators=[good_enough],
-    experiment_name=f"sage-{spec.name}",
-)
+experiment = run_experiment(dataset=dataset, task=task, evaluators=[good_enough])
 ```
 
-The **judge is a local model too** (configured in `config.yaml`) — offline by default, no API key. A hosted judge is an opt-in fallback, never the default. If the judge isn't running, judge tasks are left *unscored* rather than guessed.
-
-Set your bar in `config.yaml`:
-
-```yaml
-threshold: 0.7   # a model is a SAGE candidate only if overall pass rate >= this
-```
-
-Then run it and read the report:
-
-```bash
-python scripts/run_sage.py
-cat reports/sage_report.md
-```
-
-The report ranks models by size and marks the SAGE — **the smallest model that clears the bar**:
-
-> **Note:** The table below shows the **shape** of the output with `SAMPLE` placeholder numbers. Real numbers only appear after you run it against served models on your machine. If no model clears the bar, the report says so plainly.
-
-```markdown
-# SAGE report  (SAMPLE — illustrative shape, not a real run)
-
-| Model                  | Size (B) | Overall | extract | classify | summarize | Mean latency (s) | SAGE? |
-| ---                    | ---      | ---     | ---     | ---      | ---       | ---              | ---   |
-| Qwen2.5 0.5B Instruct  | 0.5      | 58%     | 40%     | 67%      | 50%       | 0.4              |       |
-| Qwen2.5 1.5B Instruct  | 1.5      | 75%     | 80%     | 100%     | 50%       | 0.7              | ✅    |
-| Llama 3.2 3B Instruct  | 3.0      | 83%     | 80%     | 100%     | 75%       | 1.3              |       |
-
-**SAGE = Qwen2.5 1.5B Instruct (1.5B)** — the smallest model that cleared 70%.
-```
-
-Open the experiments in the Phoenix UI to compare them side by side, drill into any failed example, and see the exact model output and judge explanation.
+The **judge is a local model too** (offline by default, no API key); if it isn't running, judge tasks are left *unscored* rather than guessed. You set the bar in `config.yaml` (`threshold: 0.7`), and the **SAGE is the smallest model that clears it**. If none does, the report says so plainly. Open the experiments in the Phoenix UI to compare them side by side and drill into any failed example.
 
 ## Appendix — Deploy your SAGE
 
-Once you've found your SAGE, wire that `(model, prompt)` into a real agent. **Goose** points at any OpenAI-compatible endpoint, so your `llama-server` works directly:
+**Run this:**
+
+```bash
+# point Goose at your llama-server, then drive it headless
+goose run -t "Extract the name, email, and company from this signature into JSON: ..."
+```
+
+**What you'll need** — Goose pointed at the winning model's endpoint:
 
 ```yaml
 # ~/.config/goose/config.yaml
@@ -319,24 +295,13 @@ OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_MODEL: qwen2.5-1.5b
 ```
 
-Put the winning prompt in a `.goosehints` file, then drive it headless:
-
-```bash
-goose run -t "Extract the name, email, and company from this signature into JSON: ..."
-```
-
-Prefer a *coding*-focused harness? **Aider** is the tightest scriptable loop — point it at the same endpoint with `OPENAI_API_BASE=http://127.0.0.1:8102/v1` and `--model openai/qwen2.5-1.5b`. Goose is the more general local-first agent; Aider/OpenCode are better when you specifically want a coding agent. Verify flags against each tool's current docs.
+**What it's doing:** Goose speaks the OpenAI-compatible protocol, so your `llama-server` endpoint works directly — put the winning prompt in a `.goosehints` file and you've replaced a frontier model with your SAGE for that task. Prefer a *coding* harness? **Aider** points at the same endpoint with `OPENAI_API_BASE=http://127.0.0.1:8102/v1` and `--model openai/qwen2.5-1.5b`.
 
 ## Bring your own data
 
-Everything above ran on the SAMPLE set. To make it *yours*:
+Everything above runs on the SAMPLE/fixture data. To make it yours: re-run **Step 1** without `--fixtures`, use **Step 2** to find your real task types, let **Step 3** draft a dataset from your real prompts (and review it), then re-run **Steps 4–5**. Your SAGE is the smallest model that's good enough for *your* work.
 
-1. Re-run **Step 1** without `--fixtures` to harvest your real history (request app exports ahead of time).
-2. Use **Step 2** to find your true recurring tasks.
-3. Curate them into a golden set in `data/` — objective answers where you can, honest judge rubrics where you can't.
-4. Re-run **Steps 3–5**. Your SAGE is the smallest model that's good enough for *your* work.
-
-> **Stretch goal:** if no small model clears your bar, don't give up on it yet — optimize the *prompt* against your dataset with [GEPA](https://github.com/gepa-ai/gepa) or `dspy.GEPA`, trace the optimization into Phoenix, and re-benchmark. The deliverable there is a better prompt, not a bigger model.
+> **Stretch goal:** if no small model clears your bar, optimize the *prompt* against your dataset with [GEPA](https://github.com/gepa-ai/gepa) or `dspy.GEPA`, trace the optimization into Phoenix, and re-benchmark. The deliverable there is a better prompt, not a bigger model.
 
 ## Tests
 
