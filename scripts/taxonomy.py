@@ -13,12 +13,22 @@ Three methods, swappable with --method:
            JSON schema) to hand to a BIG model like Claude or ChatGPT. No API key
            needed and by far the best grouping. Save the model's JSON reply as
            taxonomy.json.
-  llm      — call an OpenAI-compatible endpoint to label each prompt. Point
-           --base-url at a local llama-server or a hosted API.
+  llm      — call an OpenAI-compatible endpoint to label each prompt (ONE call
+           per prompt). Point --base-url at a local llama-server, or a hosted API
+           with --model and --api-key. Note: hosted = one paid call per prompt, so
+           for a big model prefer --method paste (one call, and no key).
 
     python scripts/taxonomy.py --in data/harvested/all.jsonl
     python scripts/taxonomy.py --in data/harvested/all.jsonl --method paste
+
+    # local llama-server
     python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm --base-url http://127.0.0.1:8102/v1
+    # OpenAI
+    python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \\
+        --base-url https://api.openai.com/v1 --model gpt-4o-mini --api-key $OPENAI_API_KEY
+    # Claude (OpenAI-compatible endpoint)
+    python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \\
+        --base-url https://api.anthropic.com/v1 --model claude-haiku-4-5-20251001 --api-key $ANTHROPIC_API_KEY
 
 Human-in-the-loop: this only PRINTS the ranked list and writes taxonomy.json.
 You choose which task types to carry into your dataset. It does not auto-decide.
@@ -28,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -59,12 +70,30 @@ _KEYWORD_BUCKETS: list[tuple[str, tuple[str, ...]]] = [
             "logs",
         ),
     ),
-    ("rewrite", ("rewrite", "reword", "rephrase", "more concise", "tone", "polish", "proofread")),
+    (
+        "rewrite",
+        (
+            "rewrite",
+            "reword",
+            "rephrase",
+            "more concise",
+            "tone",
+            "polish",
+            "proofread",
+        ),
+    ),
     ("classify", ("classify", "categorize", "categorise", "which category", "intent")),
     ("explain", ("explain", "what does", "how does", "why does", "walk me through")),
     (
         "write_code",
-        ("implement", "refactor", "write a test", "write tests", "add a test", "fix the bug"),
+        (
+            "implement",
+            "refactor",
+            "write a test",
+            "write tests",
+            "add a test",
+            "fix the bug",
+        ),
     ),
 ]
 
@@ -84,11 +113,20 @@ def bucket_keyword(text: str) -> str:
     return "other"
 
 
-def bucket_llm(texts: list[str], base_url: str) -> list[str]:
+def bucket_llm(
+    texts: list[str],
+    base_url: str,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> list[str]:
     sys.path.insert(0, str(DIR / "scripts"))
     from openai_client import LocalLLM
 
-    llm = LocalLLM(base_url=base_url)
+    llm = LocalLLM(
+        base_url=base_url,
+        api_key=api_key or "not-needed-for-local",
+        model=model or "local",
+    )
     labels = []
     for t in texts:
         prompt = (
@@ -131,7 +169,11 @@ def emit_paste_prompt(prompts: list[str], out: Path, limit: int) -> None:
     print(f"Wrote {out}")
     print(
         f"  {len(sample)} of {len(unique)} unique prompts included"
-        + (f" (capped at {limit}; raise --max-paste for more)" if len(unique) > limit else "")
+        + (
+            f" (capped at {limit}; raise --max-paste for more)"
+            if len(unique) > limit
+            else ""
+        )
     )
     print("\nNext:")
     print("  1. Paste the whole file into Claude or ChatGPT.")
@@ -143,7 +185,9 @@ def main() -> None:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--in", dest="inp", type=Path, default=DIR / "data/harvested/all.jsonl")
+    p.add_argument(
+        "--in", dest="inp", type=Path, default=DIR / "data/harvested/all.jsonl"
+    )
     p.add_argument(
         "--method",
         choices=["keyword", "llm", "paste"],
@@ -152,27 +196,51 @@ def main() -> None:
         "paste=emit a prompt to hand to a big model (Claude/ChatGPT)",
     )
     p.add_argument(
-        "--base-url", default="http://127.0.0.1:8102/v1", help="local model for --method llm"
+        "--base-url",
+        default="http://127.0.0.1:8102/v1",
+        help="endpoint for --method llm: a local llama-server, or a hosted "
+        "OpenAI-compatible API (OpenAI: https://api.openai.com/v1 ; "
+        "Claude: https://api.anthropic.com/v1)",
+    )
+    p.add_argument(
+        "--model",
+        default=None,
+        help="model id for a hosted --method llm (e.g. gpt-4o-mini, claude-haiku-4-5-20251001)",
+    )
+    p.add_argument(
+        "--api-key",
+        default=os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
+        help="API key for a hosted --method llm (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)",
     )
     p.add_argument("--out", type=Path, default=DIR / "data/taxonomy.json")
-    p.add_argument("--examples", type=int, default=3, help="representative examples per task type")
-    p.add_argument("--max-paste", type=int, default=400, help="max prompts for --method paste")
+    p.add_argument(
+        "--examples", type=int, default=3, help="representative examples per task type"
+    )
+    p.add_argument(
+        "--max-paste", type=int, default=400, help="max prompts for --method paste"
+    )
     args = p.parse_args()
 
     if not args.inp.exists():
         sys.exit(f"no harvested file at {args.inp} — run scripts/harvest.py first")
 
-    records = [json.loads(line) for line in args.inp.read_text().splitlines() if line.strip()]
+    records = [
+        json.loads(line) for line in args.inp.read_text().splitlines() if line.strip()
+    ]
     prompts = [r["text"] for r in records if r.get("role") == "user" and r.get("text")]
     if not prompts:
         sys.exit("no user prompts found in the harvested file")
 
     if args.method == "paste":
-        emit_paste_prompt(prompts, args.out.with_name("taxonomy_prompt.txt"), args.max_paste)
+        emit_paste_prompt(
+            prompts, args.out.with_name("taxonomy_prompt.txt"), args.max_paste
+        )
         return
 
     if args.method == "llm":
-        labels = bucket_llm(prompts, args.base_url)
+        labels = bucket_llm(
+            prompts, args.base_url, model=args.model, api_key=args.api_key
+        )
     else:
         labels = [bucket_keyword(t) for t in prompts]
 
@@ -194,7 +262,9 @@ def main() -> None:
         for ex in t["representative_examples"]:
             oneline = ex.replace("\n", " ")
             print(f"        - {oneline[:120]}{'…' if len(oneline) > 120 else ''}")
-    print(f"\nWrote {args.out}. Pick the task types worth an eval, then build your dataset.")
+    print(
+        f"\nWrote {args.out}. Pick the task types worth an eval, then build your dataset."
+    )
 
 
 if __name__ == "__main__":

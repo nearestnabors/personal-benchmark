@@ -142,10 +142,19 @@ Grouping messy real usage is a job for a **big model**. Two better options:
 # Claude or ChatGPT, then save its JSON reply as data/taxonomy.json.
 python scripts/taxonomy.py --in data/harvested/all.jsonl --method paste
 
-# Or call any OpenAI-compatible endpoint directly (local llama-server, or a
-# hosted API by pointing --base-url at it).
-python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm --base-url http://127.0.0.1:8102/v1
+# Or label each prompt via an OpenAI-compatible endpoint. This makes ONE call
+# per prompt, so for a hosted big model prefer `paste` above (one call, no key).
+python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
+    --base-url http://127.0.0.1:8102/v1                                   # local llama-server
+
+python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
+    --base-url https://api.openai.com/v1 --model gpt-4o-mini --api-key $OPENAI_API_KEY
+
+python scripts/taxonomy.py --in data/harvested/all.jsonl --method llm \
+    --base-url https://api.anthropic.com/v1 --model claude-haiku-4-5-20251001 --api-key $ANTHROPIC_API_KEY
 ```
+
+Claude works here because Anthropic exposes an [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk) — same client, just a different `--base-url`, `--model`, and key. (`--api-key` also falls back to `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in your environment.)
 
 Your prompts are redacted before they ever leave `harvest.py`, but `paste`/hosted `llm` do send them to a third-party model — that's your call to make.
 
